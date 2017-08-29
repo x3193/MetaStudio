@@ -86,6 +86,7 @@
 		</Configuration>
 		<Configuration
 			Name="Release|Win32"
+			OutputDirectory="$(SolutionDir)$(ConfigurationName)"
 			IntermediateDirectory="$(ConfigurationName)"
 			ConfigurationType="1"
 			>
@@ -166,6 +167,10 @@
 				>
 			</File>
 			<File
+				RelativePath=".\shader.c"
+				>
+			</File>
+			<File
 				RelativePath=".\strtools.c"
 				>
 			</File>
@@ -185,6 +190,10 @@
 			</File>
 			<File
 				RelativePath=".\metastudio.h"
+				>
+			</File>
+			<File
+				RelativePath=".\shader.h"
 				>
 			</File>
 			<File

@@ -17,15 +17,27 @@
 #include <stdio.h>	// printf
 #include <malloc.h>		// malloc free
 #include <gl/glut.h>
+#include "glext.h"
 
 #include "mathlib.h"
 #include "strtools.h"
 #include "timetools.h"
 
+typedef unsigned char byte;
+
 // MetaStudio Header
 #include "metastudio.h"
 
-typedef unsigned char byte;
+
+//#define USE_SHADER
+
+#ifdef USE_SHADER
+#include "shader.h"
+#endif
+
+
+// make pointer
+#define STUDIOHDR( base, offset ) ( (byte *)(base) + (offset) )
 
 
 // Read TGA file to buffer
@@ -123,6 +135,9 @@ int						g_time;			// current frame
 int						g_body;
 int						g_sequence;
 
+// GLshader
+int						metastudioshader;
+
 //================================================================================//
 
 
@@ -131,7 +146,7 @@ void R_MetaStudioGetKeyFrame( vec3_t *pos, vec4_t *quat, metastudioanim_t *panim
 	int						i;
 	metastudioanimvalue_t	*pvalue;
 
-	pvalue = (metastudioanimvalue_t *)( (byte *)pmetahdr + panim->valueindex );
+	pvalue = (metastudioanimvalue_t *)STUDIOHDR( pmetahdr, panim->valueindex );
 
 	// goto value[keyframe][0]
 	pvalue += keyframe * panim->numbones;
@@ -158,7 +173,7 @@ void R_MetaStudioCalcRotations( vec3_t *pos, vec4_t *quat, metastudioanim_t *pan
 	static vec3_t	pos2[ META_STUDIO_BONES ];
 	static vec4_t	quat2[ META_STUDIO_BONES ];
 
-	pkeyframetime = (int *)( (byte *)pmetahdr + panim->timeindex );
+	pkeyframetime = (int *)STUDIOHDR( pmetahdr, panim->timeindex );
 
 	starttime = pkeyframetime[ 0 ];
 	endtime = pkeyframetime[ panim->numkeyframes - 1 ];
@@ -218,7 +233,7 @@ void R_MetaStudioSetupBones( void )
 	static vec3_t			pos[ META_STUDIO_BONES ];
 	static vec4_t			quat[ META_STUDIO_BONES ];
 
-	pbone = (metastudiobone_t *)( (byte *)pmetahdr + pmetahdr->boneindex );
+	pbone = (metastudiobone_t *)STUDIOHDR( pmetahdr, pmetahdr->boneindex );
 
 	if ( g_sequence >= pmetahdr->numseq )
 	{
@@ -237,13 +252,13 @@ void R_MetaStudioSetupBones( void )
 		}
 	}
 
-	pseqdesc = (metastudioseqdesc_t *)( (byte *)pmetahdr + pmetahdr->seqindex ) + g_sequence;
+	pseqdesc = (metastudioseqdesc_t *)STUDIOHDR( pmetahdr, pmetahdr->seqindex ) + g_sequence;
 
-	panim = (metastudioanim_t *)( (byte *)pmetahdr + pseqdesc->animindex );
+	panim = (metastudioanim_t *)STUDIOHDR( pmetahdr, pseqdesc->animindex );
 
 	R_MetaStudioCalcRotations( pos, quat, panim, g_time );
 
-	// Calculate the world transform matrix for all joints
+	// calculate the world transform matrix for all bones
 	for ( i = 0; i < pmetahdr->numbones; i++ )
 	{
 		mat4_t	bonematrix;
@@ -276,13 +291,125 @@ void R_MetaStudioSetupModel( int bodypart )
 		bodypart = 0;
 	}
 
-	pbodypart = (metastudiobodyparts_t *)( (byte *)pmetahdr + pmetahdr->bodypartindex ) + bodypart;
+	pbodypart = (metastudiobodyparts_t *)STUDIOHDR( pmetahdr, pmetahdr->bodypartindex ) + bodypart;
 
 	index = g_body / pbodypart->base;
 	index = index % pbodypart->nummodels;
 
-	pmodel = (metastudiomodel_t *)( (byte *)pmetahdr + pbodypart->modelindex ) + index;
+	pmodel = (metastudiomodel_t *)STUDIOHDR( pmetahdr, pbodypart->modelindex ) + index;
 }
+
+#ifdef USE_SHADER
+
+void R_MetaStudioDrawPoints_Hardware( void )
+{
+	int						i, j;
+	metastudiomesh_t		*pmesh;
+	metastudiotexture_t		*ptexture;
+
+	GLuint		uniBoneTransform;
+	GLuint		uniTexture;
+
+	GLuint		attPosition;
+	GLuint		attNormal;
+	GLuint		attTexCoord;
+	GLuint		attNumBone;
+	GLuint		attBone;
+	GLuint		attWeight;
+
+	pmesh = (metastudiomesh_t *)STUDIOHDR( pmetahdr, pmodel->meshindex );
+
+	ptexture = (metastudiotexture_t *)STUDIOHDR( pmetahdr, pmetahdr->textureindex );
+
+	if ( !metastudioshader )
+	{
+		// Maybe the shader program is not ready?
+		return;
+	}
+
+	// Enable shader program
+	glUseProgramObjectARB( metastudioshader );
+
+	// !! Find uniforms location
+	uniBoneTransform = glGetUniformLocationARB( metastudioshader, "BoneTransform" );	// mat4[100]
+	uniTexture = glGetUniformLocationARB( metastudioshader, "Texture" );				// int
+
+	// !! Find attributes location
+	attPosition = glGetAttribLocationARB( metastudioshader, "Position" );		// vec3
+//	attNormal = glGetAttribLocationARB( metastudioshader, "Normal" );			// vec3
+	attTexCoord = glGetAttribLocationARB( metastudioshader, "TexCoord" );		// vec2
+	attNumBone = glGetAttribLocationARB( metastudioshader, "NumBone" );			// float
+	attBone = glGetAttribLocationARB( metastudioshader, "Bone" );				// vec4
+	attWeight = glGetAttribLocationARB( metastudioshader, "Weight" );			// vec4
+
+	// Bind vertex buffer of the model
+	glBindBufferARB( GL_ARRAY_BUFFER_ARB, pmodel->vbo );
+
+	// Enable the vertex array for drawing
+	glEnableVertexAttribArrayARB( attPosition );
+//	glEnableVertexAttribArrayARB( attNormal );
+	glEnableVertexAttribArrayARB( attTexCoord );
+	glEnableVertexAttribArrayARB( attNumBone );
+	glEnableVertexAttribArrayARB( attBone );
+	glEnableVertexAttribArrayARB( attWeight );
+
+	// !!! parse vertex data
+	glVertexAttribPointerARB( attPosition, 3, GL_FLOAT, GL_FALSE, sizeof( metastudiovertex_t ), META_STUDIO_POINTER_POSITION );
+//	glVertexAttribPointerARB( attNormal, 3, GL_FLOAT, GL_FALSE, sizeof( metastudiovertex_t ), META_STUDIO_POINTER_NORMAL );
+	glVertexAttribPointerARB( attTexCoord, 2, GL_FLOAT, GL_FALSE, sizeof( metastudiovertex_t ), META_STUDIO_POINTER_TEXCOORD );
+	glVertexAttribPointerARB( attNumBone, 1, GL_UNSIGNED_INT, GL_FALSE, sizeof( metastudiovertex_t ), META_STUDIO_POINTER_NUMBONE );
+	glVertexAttribPointerARB( attBone, 4, GL_UNSIGNED_INT, GL_FALSE, sizeof( metastudiovertex_t ), META_STUDIO_POINTER_BONE );
+	glVertexAttribPointerARB( attWeight, 4, GL_FLOAT, GL_FALSE, sizeof( metastudiovertex_t ), META_STUDIO_POINTER_WEIGHT );
+
+	// !!! For GLSL 110, the Integer attribute will be convert to Float. ( 4 -> 4.0 etc. )
+
+	// Submit skinning matrix
+	glUniformMatrix4fvARB( uniBoneTransform, 100, GL_FALSE, (GLfloat *)bonetransform_skin );
+
+	// Use No.0 texture unit
+	glUniform1iARB( uniTexture, 0 );
+
+	for ( i = 0; i < pmodel->nummesh; i++ )
+	{
+		// by default, the texture will be bind to the No.0 unit
+		if ( ptexture[pmesh->skinref].glt )
+		{
+			glBindTexture( GL_TEXTURE_2D, ptexture[pmesh->skinref].glt );
+		}
+		else
+		{
+			glBindTexture( GL_TEXTURE_2D, 0 );
+		}
+
+		// bind the vertex index buffer of the mesh
+		glBindBufferARB( GL_ELEMENT_ARRAY_BUFFER_ARB, pmesh->ebo );
+		
+		// draw all triangles of the mesh
+		// 3 indices per triangle
+		glDrawElements( GL_TRIANGLES, pmesh->numtris * 3, GL_UNSIGNED_INT, NULL );
+
+		// unbind the buffer
+		glBindBufferARB( GL_ELEMENT_ARRAY_BUFFER_ARB, 0 );
+
+		pmesh++;
+	}
+
+	// close the vertex array after finished drawing
+	glDisableVertexAttribArrayARB( attPosition );
+//	glDisableVertexAttribArrayARB( attNormal );
+	glDisableVertexAttribArrayARB( attTexCoord );
+	glDisableVertexAttribArrayARB( attNumBone );
+	glDisableVertexAttribArrayARB( attBone );
+	glDisableVertexAttribArrayARB( attWeight );
+
+	// unbind the vertex buffer
+	glBindBufferARB( GL_ARRAY_BUFFER_ARB, 0 );
+
+	// close the shader program
+	glUseProgramObjectARB( 0 );
+}
+
+#else
 
 void R_MetaStudioTransformAuxVert( int index, metastudiovertex_t *pv )
 {
@@ -302,53 +429,50 @@ void R_MetaStudioTransformAuxVert( int index, metastudiovertex_t *pv )
 	}
 }
 
-void R_MetaStudioDrawPoints( void )
+void R_MetaStudioDrawPoints_Software( void )
 {
 	int					i, j, k;
 	metastudiovertex_t	*pvert;
 	metastudiomesh_t	*pmesh;
 	metastudiotexture_t	*ptexture;
 
-	pvert = (metastudiovertex_t *)( (byte *)pmetahdr + pmodel->vertindex );
+	pvert = (metastudiovertex_t *)STUDIOHDR( pmetahdr, pmodel->vertindex );
 
-	pmesh = (metastudiomesh_t *)( (byte *)pmetahdr + pmodel->meshindex );
+	pmesh = (metastudiomesh_t *)STUDIOHDR( pmetahdr, pmodel->meshindex );
 
-	ptexture = (metastudiotexture_t *)( (byte *)pmetahdr + pmetahdr->textureindex );
+	ptexture = (metastudiotexture_t *)STUDIOHDR( pmetahdr, pmetahdr->textureindex );
 
 	// Apply all vertices to skeleton transformations
-	// You can do this in the vertex shader
 	for ( i = 0; i < pmodel->numverts; i++ )
 	{
 		R_MetaStudioTransformAuxVert( i, &pvert[i] );
 	}
-
-	// You can use VBO and VAO to make drawing faster
 
 	for ( i = 0; i < pmodel->nummesh; i++ )
 	{
 		metastudiotriangle_t *ptri;
 		metastudiovertex_t	 *pv;
 
-		if ( ptexture[pmesh[i].skinref].glt )
+		if ( ptexture[pmesh->skinref].glt )
 		{
-			glBindTexture( GL_TEXTURE_2D, ptexture[pmesh[i].skinref].glt );
+			glBindTexture( GL_TEXTURE_2D, ptexture[pmesh->skinref].glt );
 		}
 		else
 		{
 			glBindTexture( GL_TEXTURE_2D, 0 );
 		}
 
-		ptri = (metastudiotriangle_t *)( (byte *)pmetahdr + pmesh[i].triindex );
+		ptri = (metastudiotriangle_t *)STUDIOHDR( pmetahdr, pmesh->triindex );
 
 		glBegin( GL_TRIANGLES );
 
-		for ( j = 0; j < pmesh[i].numtris; j++ )
+		for ( j = 0; j < pmesh->numtris; j++ )
 		{
 			int	index;
 
 			for ( k = 0; k < 3; k++ )
 			{
-				index = ptri[j].indices[k];
+				index = ptri->indices[k];
 
 				pv = &pvert[index];
 
@@ -356,10 +480,25 @@ void R_MetaStudioDrawPoints( void )
 				glNormal3fv( auxnorms[index] );
 				glVertex3fv( auxverts[index] );
 			}
+
+			ptri++;
 		}
 
 		glEnd();
+
+		pmesh++;
 	}
+}
+
+#endif
+
+void R_MetaStudioDrawPoints( void )
+{
+#ifdef USE_SHADER
+	R_MetaStudioDrawPoints_Hardware();
+#else
+	R_MetaStudioDrawPoints_Software();
+#endif
 }
 
 void R_MetaStudioDrawBones( void )
@@ -367,7 +506,7 @@ void R_MetaStudioDrawBones( void )
 	int					i;
 	metastudiobone_t	*pbone;
 
-	pbone = (metastudiobone_t *)( (byte *)pmetahdr + pmetahdr->boneindex );
+	pbone = (metastudiobone_t *)STUDIOHDR( pmetahdr, pmetahdr->boneindex );
 
 	glDisable( GL_LIGHTING );
 	glDisable( GL_DEPTH_TEST );
@@ -465,7 +604,7 @@ void R_MetaStudioAdvanceFrame( double dt )
 		return;
 	}
 
-	pseqdesc = (metastudioseqdesc_t *)( (byte *)pmetahdr + pmetahdr->seqindex ) + g_sequence;
+	pseqdesc = (metastudioseqdesc_t *)STUDIOHDR( pmetahdr, pmetahdr->seqindex ) + g_sequence;
 
 	if ( dt > 0.1 )
 	{
@@ -483,12 +622,12 @@ void R_MetaStudioAdvanceFrame( double dt )
 
 metastudiohdr_t *Mod_LoadMetaStudioModel( char *filename )
 {
-	FILE				*file;
-	int					size;
-	byte				*buffer;
-	metastudiohdr_t		*phdr;
-	metastudiotexture_t	*ptexture;
-	int					i;
+	FILE					*file;
+	int						size;
+	byte					*buffer;
+	metastudiohdr_t			*phdr;
+	metastudiotexture_t		*ptexture;
+	int						i, j, k;
 
 	if ( !( file = fopen( filename, "rb" ) ) )
 	{
@@ -542,7 +681,7 @@ metastudiohdr_t *Mod_LoadMetaStudioModel( char *filename )
 		return 0;
 	}
 
-	ptexture = (metastudiotexture_t *)( (byte *)phdr + phdr->textureindex );
+	ptexture = (metastudiotexture_t *)STUDIOHDR( phdr, phdr->textureindex );
 
 	// Try loading all textures here
 	for ( i = 0; i < phdr->numtextures; i++ )
@@ -551,32 +690,130 @@ metastudiohdr_t *Mod_LoadMetaStudioModel( char *filename )
 
 		strcpy( path, filename );			// "c:\mdl\1.mdl"
 		StripFileName( path );				// "c:\mdl\"
-		strcat( path, ptexture[i].name );	// "c:\mdl\skin.tga"
+		strcat( path, ptexture->name );	// "c:\mdl\skin.tga"
 
 		if ( CheckExtension( path, ".tga" ) )
 		{
-			ptexture[i].glt = GL_LoadTGA( path, &ptexture[i].width, &ptexture[i].height );
+			ptexture->glt = GL_LoadTGA( path, &ptexture->width, &ptexture->height );
 		}
+
+		ptexture++;
 	}
+
+#ifdef USE_SHADER
+
+	pbodypart = (metastudiobodyparts_t *)STUDIOHDR( phdr, phdr->bodypartindex );
+
+	for ( i = 0; i < phdr->numbodyparts; i++ )
+	{
+		pmodel = (metastudiomodel_t *)STUDIOHDR( phdr, pbodypart->modelindex );
+
+		for ( j = 0; j < pbodypart->nummodels; j++ )
+		{
+			GLuint				vbo;
+			GLuint				ebo;
+			metastudiovertex_t	*pvert;
+			metastudiomesh_t	*pmesh;
+
+			pvert = (metastudiovertex_t *)STUDIOHDR( phdr, pmodel->vertindex );
+
+			// load all vertices into vertex buffer
+			glGenBuffersARB( 1, &vbo );
+			glBindBufferARB( GL_ARRAY_BUFFER_ARB, vbo );
+			glBufferDataARB( GL_ARRAY_BUFFER_ARB, pmodel->numverts * sizeof( metastudiovertex_t ), pvert, GL_STATIC_DRAW_ARB );
+			glBindBufferARB( GL_ARRAY_BUFFER_ARB, 0 );
+
+			pmodel->vbo = vbo;
+
+			pmesh = (metastudiomesh_t *)STUDIOHDR( phdr, pmodel->meshindex );
+
+			for ( k = 0; k < pmodel->nummesh; k++ )
+			{
+				metastudiotriangle_t	*ptris;
+
+				ptris = (metastudiotriangle_t *)STUDIOHDR( phdr, pmesh->triindex );
+
+				// load all indices into index buffer
+				glGenBuffersARB( 1, &ebo );
+				glBindBufferARB( GL_ELEMENT_ARRAY_BUFFER_ARB, ebo );
+				glBufferDataARB( GL_ELEMENT_ARRAY_BUFFER_ARB, pmesh->numtris * sizeof( metastudiotriangle_t ), ptris, GL_STATIC_DRAW_ARB );
+				glBindBufferARB( GL_ELEMENT_ARRAY_BUFFER_ARB, 0 );
+
+				pmesh->ebo = ebo;
+
+				pmesh++;
+			}
+
+			pmodel++;
+		}
+
+		pbodypart++;
+	}
+
+#endif
 
 	return phdr;
 }
 
 void Mod_FreeMetaStudioModel( metastudiohdr_t *phdr )
 {
-	int						i;
+	int						i, j, k;
 	metastudiotexture_t		*ptexture;
 
-	ptexture = (metastudiotexture_t *)( (byte *)phdr + phdr->textureindex );
+	ptexture = (metastudiotexture_t *)STUDIOHDR( phdr, phdr->textureindex );
 
 	// free all loaded textures
 	for ( i = 0; i < phdr->numtextures; i++ )
 	{
-		if ( ptexture[i].glt )
+		if ( ptexture->glt )
 		{
-			GL_DeleteTexture( ptexture[i].glt );
+			GL_DeleteTexture( ptexture->glt );
 		}
+
+		ptexture++;
 	}
+
+#ifdef USE_SHADER
+
+	pbodypart = (metastudiobodyparts_t *)STUDIOHDR( phdr, phdr->bodypartindex );
+
+	for ( i = 0; i < phdr->numbodyparts; i++ )
+	{
+		pmodel = (metastudiomodel_t *)STUDIOHDR( phdr, pbodypart->modelindex );
+
+		for ( j = 0; j < pbodypart->nummodels; j++ )
+		{
+			metastudiomesh_t	*pmesh;
+
+			if ( pmodel->vbo )
+			{
+				glDeleteBuffersARB( 1, (GLuint *)&pmodel->vbo );
+			}
+
+			pmesh = (metastudiomesh_t *)STUDIOHDR( phdr, pmodel->meshindex );
+
+			for ( k = 0; k < pmodel->nummesh; k++ )
+			{
+				if ( pmesh->ebo )
+				{
+					glDeleteBuffersARB( 1, (GLuint *)&pmesh->ebo );
+				}
+
+				if ( pmesh->vao )
+				{
+					glDeleteBuffersARB( 1, (GLuint *)&pmesh->vao );
+				}
+
+				pmesh++;
+			}
+
+			pmodel++;
+		}
+
+		pbodypart++;
+	}
+
+#endif
 
 	// free the file
 	free( phdr );
@@ -584,6 +821,16 @@ void Mod_FreeMetaStudioModel( metastudiohdr_t *phdr )
 
 void init( void )
 {
+#ifdef USE_SHADER
+
+	// Initialize shader functions
+	GL_InitShader();
+
+	// Load and compile shader program
+	metastudioshader = GL_LoadShader( ".\\shader\\metastudio.vsh", ".\\shader\\metastudio.fsh" );
+
+#endif
+
 	glMatrixMode( GL_MODELVIEW );
 	glLoadIdentity();
 }

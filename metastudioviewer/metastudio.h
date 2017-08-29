@@ -196,6 +196,17 @@ typedef struct
 
 } metastudiovertex_t;
 
+#define _META_STUDIO_MAKE_POINTER( s, m )   ( (void *) &( ((s *)0)->m ) )
+
+#define META_STUDIO_POINTER_POSITION	_META_STUDIO_MAKE_POINTER( metastudiovertex_t, pos )
+#define META_STUDIO_POINTER_TANGENT		_META_STUDIO_MAKE_POINTER( metastudiovertex_t, tang )
+#define META_STUDIO_POINTER_BITANGENT	_META_STUDIO_MAKE_POINTER( metastudiovertex_t, bitang )
+#define META_STUDIO_POINTER_NORMAL		_META_STUDIO_MAKE_POINTER( metastudiovertex_t, norm )
+#define META_STUDIO_POINTER_TEXCOORD	_META_STUDIO_MAKE_POINTER( metastudiovertex_t, uv )
+#define META_STUDIO_POINTER_NUMBONE		_META_STUDIO_MAKE_POINTER( metastudiovertex_t, numbones )
+#define META_STUDIO_POINTER_BONE		_META_STUDIO_MAKE_POINTER( metastudiovertex_t, bone )
+#define META_STUDIO_POINTER_WEIGHT		_META_STUDIO_MAKE_POINTER( metastudiovertex_t, weight )
+
 typedef struct
 {
 	int				indices[3];
@@ -210,6 +221,7 @@ typedef struct
 	int				skinref;	// index into texture array
 
 	// rendering
+	int				ebo;
 	int				vao;
 
 } metastudiomesh_t;

@@ -1843,8 +1843,12 @@ void WriteModel( void )
 			VectorCopy( model[iModel].vertex[iVert].norm, pvertex[iVert].norm );
 			VectorCopy2( model[iModel].vertex[iVert].uv, pvertex[iVert].uv );
 			pvertex[iVert].numbones = model[iModel].vertex[iVert].numbones;
-			memcpy( pvertex[iVert].bone, model[iModel].vertex[iVert].bone, sizeof( pvertex[iVert].bone ) );
-			memcpy( pvertex[iVert].weight, model[iModel].vertex[iVert].weight, sizeof( pvertex[iVert].weight ) );
+			// copy weights
+			for ( i = 0; i < 4; i++ )
+			{
+				pvertex[iVert].bone[i] = model[iModel].vertex[iVert].bone[i];
+				pvertex[iVert].weight[i] = model[iModel].vertex[iVert].weight[i];
+			}
 		}
 
 		pData += model[iModel].numverts * sizeof( metastudiovertex_t );

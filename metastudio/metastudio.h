@@ -210,6 +210,7 @@ typedef struct
 	int				skinref;
 
 	// rendering
+	int				ebo;
 	int				vao;
 
 } metastudiomesh_t;
